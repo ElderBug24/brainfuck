@@ -38,10 +38,12 @@ void cleanup(void) {
   free(loop_stack);
 
   if (fd != -1)
-    close(fd);
+    if (close(fd) == -1)
+      perror("close");
 
   if (out_fd != -1)
-    close(out_fd);
+    if (close(out_fd) == -1)
+      perror("close");
 }
 
 void signal_handler(int sig) {
@@ -56,17 +58,17 @@ int main(int argc, char** argv) {
   signal(SIGTERM, signal_handler);
   signal(SIGHUP,  signal_handler);
 
-  unsigned stack_size = 256;
+  long long unsigned mem_size = 256;
   size_t input_len = 0;
   char* output_filepath = NULL;
   for (unsigned i = 1; i < argc; ++i) {
-    if (memcmp(argv[i], "--stack", 7) == 0) {
-      if (sscanf(&argv[i][7], "%u", &stack_size) != 1) {
-        fprintf(stderr, "error: could not parse '%s' as a positive integer\n", &argv[i][7]);
+    if (memcmp(argv[i], "--mem", 5) == 0) {
+      if (sscanf(&argv[i][5], "%llu", &mem_size) != 1) {
+        fprintf(stderr, "error: could not parse '%s' as a positive integer\n", &argv[i][5]);
         return EXIT_FAILURE;
       }
-    } else if (memcmp(argv[i], "-s", 2) == 0) {
-      if (sscanf(&argv[i][2], "%u", &stack_size) != 1) {
+    } else if (memcmp(argv[i], "-m", 2) == 0) {
+      if (sscanf(&argv[i][2], "%llu", &mem_size) != 1) {
         fprintf(stderr, "error: could not parse '%s' as a positive integer\n", &argv[i][2]);
         return EXIT_FAILURE;
       }
@@ -191,7 +193,7 @@ int main(int argc, char** argv) {
         continue;
     }
 
-    if (instruction == last && instruction < BFI_STACKABLE)
+    if (instruction == last && instruction < BFI_STACKABLE && count < UINT64_MAX)
       count += 1;
     else {
       if (last != BFI_NONE) {
@@ -225,8 +227,96 @@ int main(int argc, char** argv) {
       last = instruction;
     }
   }
+  if (last != BFI_NONE) {
+    if (instructions_count == instructions_capacity) {
+      instructions_capacity *= 2;
+      instructions = realloc(instructions, instructions_capacity * sizeof(struct bf_instruction));
+    }
 
-  printf("output: %s\n", output_filepath);
+    size_t ref = 0;
+    if (last == BFI_LOOP) {
+      if (loop_stack_count == loop_stack_capacity) {
+        loop_stack_capacity *= 2;
+        loop_stack = realloc(loop_stack, loop_stack_capacity * sizeof(size_t));
+      }
+
+      loop_stack[loop_stack_count++] = instructions_count;
+    } else if (last == BFI_END) {
+      ref = loop_stack[--loop_stack_count];
+      instructions[ref].ref = instructions_count;
+    }
+
+    instructions[instructions_count++] = (struct bf_instruction) {
+      .type = last,
+      .ref = ref,
+      .count = count
+    };
+  }
+
+  if (close(fd) == -1) {
+    fd = -1;
+    perror("close");
+    return EXIT_FAILURE;
+  }
+  fd = -1;
+
+  out_fd = open(output_filepath, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (out_fd == -1) {
+    perror("open");
+    return EXIT_FAILURE;
+  }
+
+  char* asm_header;
+  int asm_header_count = asprintf(&asm_header,
+      "format ELF64 executable 32\n"
+      "entry start\n\n"
+      "segment readable writeable\n\n"
+      "mem rb %llu\n\n"
+      "segment readable executable\n\n"
+      "start:\n", mem_size);
+  if (asm_header_count < 0 || asm_header == NULL) {
+    perror("asprintf");
+    return EXIT_FAILURE;
+  }
+
+  if (write(out_fd, asm_header, asm_header_count) < 0) {
+    perror("write");
+    return EXIT_FAILURE;
+  }
+
+  free(asm_header);
+
+  for (size_t i = 0; i < instructions_count; ++i) {
+    struct bf_instruction instruction = instructions[i];
+
+    switch (instruction.type) {
+      case BFI_NONE:
+      case BFI_STACKABLE:
+        continue;
+    }
+  }
+
+  char* asm_exits;
+  int asm_exits_count = asprintf(&asm_exits,
+      "exit_success:\n"
+      "  mov eax, 60\n"
+      "  mov rdi, %d\n"
+      "  syscall\n"
+      "exit_failure:\n"
+      "  mov eax, 60\n"
+      "  mov rdi, %d\n"
+      "  syscall\n\n", EXIT_SUCCESS, EXIT_FAILURE);
+  if (asm_exits_count < 0 || asm_exits == NULL) {
+    perror("asprintf");
+    return EXIT_FAILURE;
+  }
+
+  if (write(out_fd, asm_exits, asm_exits_count) < 0) {
+    perror("write");
+    return EXIT_FAILURE;
+  }
+
+  free(asm_exits);
 
   return EXIT_SUCCESS;
 }
