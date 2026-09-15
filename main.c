@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
         if (dprintf(out_fd,
               "  ; left %lu\n"
               "  mov eax, %lu\n"
-              "  call move\n\n", instruction.count, UINT32_MAX - instruction.count) < 0) {
+              "  call move\n\n", instruction.count, UINT32_MAX - instruction.count + 1) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -341,6 +341,28 @@ int main(int argc, char** argv) {
         if (dprintf(out_fd,
               "  ; out\n"
               "  call print\n\n") < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_IN:
+        fprintf(stderr, "not implemented yet"); // TODO
+        return EXIT_FAILURE;
+      case BFI_LOOP:
+        if (dprintf(out_fd,
+              "  ; loop %1$lu\n"
+              "loop_%1$lu:\n"
+              "  cmp cl, 0\n"
+              "  je end_%2$lu\n\n", i, instruction.ref) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_END:
+        if (dprintf(out_fd,
+              "  ; end %1$lu\n"
+              "  jmp loop_%2$lu\n"
+              "end_%1$lu:\n\n", i, instruction.ref) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
