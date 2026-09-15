@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -97,6 +98,7 @@ int main(int argc, char** argv) {
   long long unsigned mem_size = 256;
   size_t input_len = 0;
   char* output_filepath = NULL;
+  bool inline_func = false;
   for (unsigned i = 1; i < argc; ++i) {
     if (memcmp(argv[i], "--mem", 5) == 0) {
       if (sscanf(&argv[i][5], "%llu", &mem_size) != 1) {
@@ -108,6 +110,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "error: could not parse '%s' as a positive integer\n", &argv[i][2]);
         return EXIT_FAILURE;
       }
+    } else if (strcmp(argv[i], "--inline") == 0) {
+      inline_func = true;
+    } else if (strcmp(argv[i], "--no-inline") == 0) {
+      inline_func = false;
     } else if (input != NULL) {
       if (output_filepath == NULL)
         output_filepath = argv[i];
@@ -302,32 +308,33 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  // TODO: either set as labels or inline
   if (dprintf(out_fd,
         "format ELF64 executable 32\n"
         "entry start\n\n"
         "segment readable writeable\n\n"
         "mem_size = %llu\n"
         "mem db mem_size dup (0)\n\n"
-        "segment readable executable\n\n"
-        "move:\n", mem_size) < 0
-      || write_move_body(out_fd) < 0
+        "segment readable executable\n\n", mem_size) < 0
+      || !inline_func && (
+        dprintf(out_fd, "move:\n") < 0
+        || write_move_body(out_fd) < 0
+        || dprintf(out_fd,
+          "  ret\n\n"
+          "input:\n") < 0
+        || write_input_body(out_fd) < 0
+        || dprintf(out_fd,
+          "  ret\n\n"
+          "print:\n") < 0
+        || write_print_body(out_fd) < 0
+        || dprintf(out_fd, "  ret\n\n") < 0
+        )
       || dprintf(out_fd,
-        "  ret\n\n"
-        "input:\n") < 0
-      || write_input_body(out_fd) < 0
-      || dprintf(out_fd,
-        "  ret\n\n"
-        "print:\n") < 0
-      || write_print_body(out_fd) < 0
-      || dprintf(out_fd,
-        "  ret\n\n"
         "start:\n"
         "  mov cl, 0\n"
         "  mov ebp, 0\n\n") < 0) {
-    perror("dprintf");
-    return EXIT_FAILURE;
-  }
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
 
   for (size_t i = 0; i < instructions_count; ++i) {
     struct bf_instruction instruction = instructions[i];
@@ -336,8 +343,10 @@ int main(int argc, char** argv) {
       case BFI_RIGHT:
         if (dprintf(out_fd,
               "  ; right %1$lu\n"
-              "  mov eax, %1$lu\n"
-              "  call move\n\n", instruction.count) < 0) {
+              "  mov eax, %1$lu\n", instruction.count) < 0
+            || (inline_func ?
+              (write_move_body(out_fd) < 0 || dprintf(out_fd, "\n") < 0)
+              : (dprintf(out_fd, "  call move\n\n") < 0))) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -345,8 +354,10 @@ int main(int argc, char** argv) {
       case BFI_LEFT:
         if (dprintf(out_fd,
               "  ; left %lu\n"
-              "  mov eax, %lu\n"
-              "  call move\n\n", instruction.count, UINT32_MAX - instruction.count + 1) < 0) {
+              "  mov eax, %lu\n", instruction.count, UINT32_MAX - instruction.count + 1) < 0
+            || (inline_func ?
+              (write_move_body(out_fd) < 0 || dprintf(out_fd, "\n") < 0)
+              : (dprintf(out_fd, "  call move\n\n") < 0))) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -369,16 +380,20 @@ int main(int argc, char** argv) {
         break;
       case BFI_OUT:
         if (dprintf(out_fd,
-              "  ; out\n"
-              "  call print\n\n") < 0) {
+              "  ; out\n") < 0
+            || (inline_func ?
+              (write_print_body(out_fd) < 0 || dprintf(out_fd, "\n") < 0)
+              : (dprintf(out_fd, "  call print\n\n") < 0))) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
         break;
       case BFI_IN:
         if (dprintf(out_fd,
-              "  ; in\n"
-              "  call input\n\n") < 0) {
+              "  ; in\n") < 0
+            || (inline_func ?
+              (write_input_body(out_fd) < 0 || dprintf(out_fd, "\n") < 0)
+              : (dprintf(out_fd, "  call input\n\n") < 0))) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
