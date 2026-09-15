@@ -283,18 +283,30 @@ int main(int argc, char** argv) {
         "  mov ebp, edx\n"
         "  mov cl, [mem + ebp]\n"
         "  ret\n\n"
-        "print:\n"
-        "  mov [mem + ebp], cl\n"
-        "  mov rax, 1\n"
-        "  mov rdi, 1\n"
+        "input:\n"
+        "  mov rax, 0\n"
+        "  mov rdi, %d\n"
         "  lea rsi, [mem + ebp]\n"
         "  mov rdx, 1\n"
         "  syscall\n"
+        "  test rax, rax\n"
+        "  js exit_failure\n"
+        "  mov cl, [mem + ebp]\n"
+        "  ret\n\n"
+        "print:\n"
+        "  mov [mem + ebp], cl\n"
+        "  mov rax, 1\n"
+        "  mov rdi, %d\n"
+        "  lea rsi, [mem + ebp]\n"
+        "  mov rdx, 1\n"
+        "  syscall\n"
+        "  test rax, rax\n"
+        "  js exit_failure\n"
         "  mov cl, [mem + ebp]\n"
         "  ret\n\n"
         "start:\n"
         "  mov cl, 0\n"
-        "  mov ebp, 0\n\n", mem_size) < 0) {
+        "  mov ebp, 0\n\n", mem_size, STDIN_FILENO, STDOUT_FILENO) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -346,8 +358,13 @@ int main(int argc, char** argv) {
         }
         break;
       case BFI_IN:
-        fprintf(stderr, "not implemented yet"); // TODO
-        return EXIT_FAILURE;
+        if (dprintf(out_fd,
+              "  ; in\n"
+              "  call input\n\n") < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
       case BFI_LOOP:
         if (dprintf(out_fd,
               "  ; loop %1$lu\n"
@@ -379,6 +396,8 @@ int main(int argc, char** argv) {
         "  mov eax, 60\n"
         "  mov rdi, %d\n"
         "  syscall\n"
+        "  test rax, rax\n"
+        "  js exit_failure\n\n"
         "exit_failure:\n"
         "  mov eax, 60\n"
         "  mov rdi, %d\n"
