@@ -52,6 +52,42 @@ void signal_handler(int sig) {
   exit(EXIT_FAILURE);
 }
 
+int write_move_body(int fd) {
+  return dprintf(fd,
+      "  mov [mem + ebp], cl\n"
+      "  add eax, ebp\n"
+      "  mov ebx, mem_size\n"
+      "  xor edx, edx\n"
+      "  div ebx\n"
+      "  mov ebp, edx\n"
+      "  mov cl, [mem + ebp]\n");
+}
+
+int write_input_body(int fd) {
+  return dprintf(fd,
+      "  mov rax, 0\n"
+      "  mov rdi, %d\n"
+      "  lea rsi, [mem + ebp]\n"
+      "  mov rdx, 1\n"
+      "  syscall\n"
+      "  test rax, rax\n"
+      "  js exit_failure\n"
+      "  mov cl, [mem + ebp]\n", STDIN_FILENO);
+}
+
+int write_print_body(int fd) {
+  return dprintf(fd,
+      "  mov [mem + ebp], cl\n"
+      "  mov rax, 1\n"
+      "  mov rdi, %d\n"
+      "  lea rsi, [mem + ebp]\n"
+      "  mov rdx, 1\n"
+      "  syscall\n"
+      "  test rax, rax\n"
+      "  js exit_failure\n"
+      "  mov cl, [mem + ebp]\n", STDOUT_FILENO);
+}
+
 int main(int argc, char** argv) {
   atexit(cleanup);
   signal(SIGINT,  signal_handler);
@@ -266,7 +302,7 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  // TODO: factorize into functions that write to file and either set as labels or inline
+  // TODO: either set as labels or inline
   if (dprintf(out_fd,
         "format ELF64 executable 32\n"
         "entry start\n\n"
@@ -274,42 +310,24 @@ int main(int argc, char** argv) {
         "mem_size = %llu\n"
         "mem db mem_size dup (0)\n\n"
         "segment readable executable\n\n"
-        "move:\n"
-        "  mov [mem + ebp], cl\n"
-        "  add eax, ebp\n"
-        "  mov ebx, mem_size\n"
-        "  xor edx, edx\n"
-        "  div ebx\n"
-        "  mov ebp, edx\n"
-        "  mov cl, [mem + ebp]\n"
+        "move:\n", mem_size) < 0
+      || write_move_body(out_fd) < 0
+      || dprintf(out_fd,
         "  ret\n\n"
-        "input:\n"
-        "  mov rax, 0\n"
-        "  mov rdi, %d\n"
-        "  lea rsi, [mem + ebp]\n"
-        "  mov rdx, 1\n"
-        "  syscall\n"
-        "  test rax, rax\n"
-        "  js exit_failure\n"
-        "  mov cl, [mem + ebp]\n"
+        "input:\n") < 0
+      || write_input_body(out_fd) < 0
+      || dprintf(out_fd,
         "  ret\n\n"
-        "print:\n"
-        "  mov [mem + ebp], cl\n"
-        "  mov rax, 1\n"
-        "  mov rdi, %d\n"
-        "  lea rsi, [mem + ebp]\n"
-        "  mov rdx, 1\n"
-        "  syscall\n"
-        "  test rax, rax\n"
-        "  js exit_failure\n"
-        "  mov cl, [mem + ebp]\n"
+        "print:\n") < 0
+      || write_print_body(out_fd) < 0
+      || dprintf(out_fd,
         "  ret\n\n"
         "start:\n"
         "  mov cl, 0\n"
-        "  mov ebp, 0\n\n", mem_size, STDIN_FILENO, STDOUT_FILENO) < 0) {
-          perror("dprintf");
-          return EXIT_FAILURE;
-        }
+        "  mov ebp, 0\n\n") < 0) {
+    perror("dprintf");
+    return EXIT_FAILURE;
+  }
 
   for (size_t i = 0; i < instructions_count; ++i) {
     struct bf_instruction instruction = instructions[i];
