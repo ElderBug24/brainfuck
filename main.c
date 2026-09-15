@@ -266,57 +266,104 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  char* asm_header;
-  int asm_header_count = asprintf(&asm_header,
-      "format ELF64 executable 32\n"
-      "entry start\n\n"
-      "segment readable writeable\n\n"
-      "mem rb %llu\n\n"
-      "segment readable executable\n\n"
-      "start:\n", mem_size);
-  if (asm_header_count < 0 || asm_header == NULL) {
-    perror("asprintf");
-    return EXIT_FAILURE;
-  }
-
-  if (write(out_fd, asm_header, asm_header_count) < 0) {
-    perror("write");
-    return EXIT_FAILURE;
-  }
-
-  free(asm_header);
+  // TODO: factorize into functions that write to file and either set as labels or inline
+  if (dprintf(out_fd,
+        "format ELF64 executable 32\n"
+        "entry start\n\n"
+        "segment readable writeable\n\n"
+        "mem_size = %llu\n"
+        "mem db mem_size dup (0)\n\n"
+        "segment readable executable\n\n"
+        "move:\n"
+        "  mov [mem + ebp], cl\n"
+        "  add eax, ebp\n"
+        "  mov ebx, mem_size\n"
+        "  xor edx, edx\n"
+        "  div ebx\n"
+        "  mov ebp, edx\n"
+        "  mov cl, [mem + ebp]\n"
+        "  ret\n\n"
+        "print:\n"
+        "  mov [mem + ebp], cl\n"
+        "  mov rax, 1\n"
+        "  mov rdi, 1\n"
+        "  lea rsi, [mem + ebp]\n"
+        "  mov rdx, 1\n"
+        "  syscall\n"
+        "  mov cl, [mem + ebp]\n"
+        "  ret\n\n"
+        "start:\n"
+        "  mov cl, 0\n"
+        "  mov ebp, 0\n\n", mem_size) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
 
   for (size_t i = 0; i < instructions_count; ++i) {
     struct bf_instruction instruction = instructions[i];
 
     switch (instruction.type) {
+      case BFI_RIGHT:
+        if (dprintf(out_fd,
+              "  ; right %1$lu\n"
+              "  mov eax, %1$lu\n"
+              "  call move\n\n", instruction.count) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_LEFT:
+        if (dprintf(out_fd,
+              "  ; left %lu\n"
+              "  mov eax, %lu\n"
+              "  call move\n\n", instruction.count, UINT32_MAX - instruction.count) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_INC:
+        if (dprintf(out_fd,
+              "  ; inc %lu\n"
+              "  add cl, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_DEC:
+        if (dprintf(out_fd,
+              "  ; dec %lu\n"
+              "  sub cl, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
+      case BFI_OUT:
+        if (dprintf(out_fd,
+              "  ; out\n"
+              "  call print\n\n") < 0) {
+          perror("dprintf");
+          return EXIT_FAILURE;
+        }
+        break;
       case BFI_NONE:
       case BFI_STACKABLE:
-        continue;
+        fprintf(stderr, "unreachable");
+        return EXIT_FAILURE;
     }
   }
 
-  char* asm_exits;
-  int asm_exits_count = asprintf(&asm_exits,
-      "exit_success:\n"
-      "  mov eax, 60\n"
-      "  mov rdi, %d\n"
-      "  syscall\n"
-      "exit_failure:\n"
-      "  mov eax, 60\n"
-      "  mov rdi, %d\n"
-      "  syscall\n\n", EXIT_SUCCESS, EXIT_FAILURE);
-  if (asm_exits_count < 0 || asm_exits == NULL) {
-    perror("asprintf");
+  if (dprintf(out_fd,
+        "exit_success:\n"
+        "  mov eax, 60\n"
+        "  mov rdi, %d\n"
+        "  syscall\n"
+        "exit_failure:\n"
+        "  mov eax, 60\n"
+        "  mov rdi, %d\n"
+        "  syscall\n\n", EXIT_SUCCESS, EXIT_FAILURE) < 0) {
+    perror("dprintf");
     return EXIT_FAILURE;
   }
-
-  if (write(out_fd, asm_exits, asm_exits_count) < 0) {
-    perror("write");
-    return EXIT_FAILURE;
-  }
-
-  free(asm_exits);
 
   return EXIT_SUCCESS;
 }
