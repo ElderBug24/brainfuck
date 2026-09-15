@@ -119,18 +119,20 @@ int write_raw_mode_init_body(int fd) {
       "  js exit_failure\n", __NR_ioctl, STDIN_FILENO, TCGETS, sizeof(struct termios), offsetof(struct termios, c_lflag), (tcflag_t) ~(ICANON | ECHO), offsetof(struct termios, c_cc) + VMIN * sizeof(cc_t), offsetof(struct termios, c_cc) + VTIME * sizeof(cc_t), TCSETS);
 }
 
-int write_raw_mode_restore_body(int fd) {
+int write_raw_mode_restore_body(int fd, bool graceful_exit) {
   return dprintf(fd,
       "  mov rax, %d\n"
       "  mov rdi, %d\n"
       "  mov rsi, %d\n"
       "  mov rdx, orig_termios\n"
       "  syscall\n"
+      "%s", __NR_ioctl, STDIN_FILENO, TCSETS,
+      graceful_exit ?
       "  test rax, rax\n"
-      "  js exit_failure\n", __NR_ioctl, STDIN_FILENO, TCSETS);
+      "  js exit_failure\n" : "");
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) { // TODO: check for loop / end coherence
   atexit(cleanup);
   signal(SIGINT,  signal_handler);
   signal(SIGTERM, signal_handler);
@@ -471,7 +473,7 @@ int main(int argc, char** argv) {
 
   if (dprintf(out_fd,
         "exit_success:\n") < 0
-      || write_raw_mode_restore_body(out_fd) < 0
+      || write_raw_mode_restore_body(out_fd, true) < 0
       || dprintf(out_fd,
         "  mov rax, %d\n"
         "  mov rdi, %d\n"
@@ -479,7 +481,7 @@ int main(int argc, char** argv) {
         "  test rax, rax\n"
         "  js exit_failure\n\n"
         "exit_failure:\n", __NR_exit, EXIT_SUCCESS) < 0
-      || write_raw_mode_restore_body(out_fd) < 0
+      || write_raw_mode_restore_body(out_fd, false) < 0
       || dprintf(out_fd,
         "  mov rax, %d\n"
         "  mov rdi, %d\n"
