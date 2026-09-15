@@ -2,11 +2,15 @@
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
+#include <asm/unistd.h>
 
 enum bfi {
   BFI_NONE,
@@ -66,27 +70,64 @@ int write_move_body(int fd) {
 
 int write_input_body(int fd) {
   return dprintf(fd,
-      "  mov rax, 0\n"
+      "  mov rax, %d\n"
       "  mov rdi, %d\n"
       "  lea rsi, [mem + ebp]\n"
       "  mov rdx, 1\n"
       "  syscall\n"
       "  test rax, rax\n"
       "  js exit_failure\n"
-      "  mov cl, [mem + ebp]\n", STDIN_FILENO);
+      "  mov cl, [mem + ebp]\n", __NR_read, STDIN_FILENO);
 }
 
 int write_print_body(int fd) {
   return dprintf(fd,
       "  mov [mem + ebp], cl\n"
-      "  mov rax, 1\n"
+      "  mov rax, %d\n"
       "  mov rdi, %d\n"
       "  lea rsi, [mem + ebp]\n"
       "  mov rdx, 1\n"
       "  syscall\n"
       "  test rax, rax\n"
       "  js exit_failure\n"
-      "  mov cl, [mem + ebp]\n", STDOUT_FILENO);
+      "  mov cl, [mem + ebp]\n", __NR_write, STDOUT_FILENO);
+}
+
+int write_raw_mode_init_body(int fd) {
+  return dprintf(fd,
+      "  mov rax, %1$d\n"
+      "  mov rdi, %2$d\n"
+      "  mov rsi, %3$d\n"
+      "  mov rdx, orig_termios\n"
+      "  syscall\n"
+      "  test rax, rax\n"
+      "  js exit_failure\n"
+      "  mov rcx, %4$lu\n"
+      "  copy_termios:\n"
+      "    mov al, [orig_termios + rcx - 1]\n"
+      "    mov [termios + rcx - 1], al\n"
+      "    loop copy_termios\n"
+      "  and dword [termios + %5$lu], %6$u\n"
+      "  mov byte [termios + %7$lu], 1\n"
+      "  mov byte [termios + %8$lu], 0\n"
+      "  mov rax, %1$d\n"
+      "  mov rdi, %2$d\n"
+      "  mov rsi, %9$d\n"
+      "  mov rdx, termios\n"
+      "  syscall\n"
+      "  test rax, rax\n"
+      "  js exit_failure\n", __NR_ioctl, STDIN_FILENO, TCGETS, sizeof(struct termios), offsetof(struct termios, c_lflag), (tcflag_t) ~(ICANON | ECHO), offsetof(struct termios, c_cc) + VMIN * sizeof(cc_t), offsetof(struct termios, c_cc) + VTIME * sizeof(cc_t), TCSETS);
+}
+
+int write_raw_mode_restore_body(int fd) {
+  return dprintf(fd,
+      "  mov rax, %d\n"
+      "  mov rdi, %d\n"
+      "  mov rsi, %d\n"
+      "  mov rdx, orig_termios\n"
+      "  syscall\n"
+      "  test rax, rax\n"
+      "  js exit_failure\n", __NR_ioctl, STDIN_FILENO, TCSETS);
 }
 
 int main(int argc, char** argv) {
@@ -312,9 +353,11 @@ int main(int argc, char** argv) {
         "format ELF64 executable 32\n"
         "entry start\n\n"
         "segment readable writeable\n\n"
-        "mem_size = %llu\n"
-        "mem db mem_size dup (0)\n\n"
-        "segment readable executable\n\n", mem_size) < 0
+        "mem_size = %1$llu\n"
+        "mem db mem_size dup (0)\n"
+        "termios rb %2$lu\n"
+        "orig_termios rb %2$lu\n\n"
+        "segment readable executable\n\n", mem_size, sizeof(struct termios)) < 0
       || !inline_func && (
         dprintf(out_fd, "move:\n") < 0
         || write_move_body(out_fd) < 0
@@ -329,7 +372,9 @@ int main(int argc, char** argv) {
         || dprintf(out_fd, "  ret\n\n") < 0
         )
       || dprintf(out_fd,
-        "start:\n"
+        "start:\n") < 0
+      || write_raw_mode_init_body(out_fd) < 0
+      || dprintf(out_fd,
         "  mov cl, 0\n"
         "  mov ebp, 0\n\n") < 0) {
           perror("dprintf");
@@ -425,16 +470,20 @@ int main(int argc, char** argv) {
   }
 
   if (dprintf(out_fd,
-        "exit_success:\n"
-        "  mov eax, 60\n"
+        "exit_success:\n") < 0
+      || write_raw_mode_restore_body(out_fd) < 0
+      || dprintf(out_fd,
+        "  mov rax, %d\n"
         "  mov rdi, %d\n"
         "  syscall\n"
         "  test rax, rax\n"
         "  js exit_failure\n\n"
-        "exit_failure:\n"
-        "  mov eax, 60\n"
+        "exit_failure:\n", __NR_exit, EXIT_SUCCESS) < 0
+      || write_raw_mode_restore_body(out_fd) < 0
+      || dprintf(out_fd,
+        "  mov rax, %d\n"
         "  mov rdi, %d\n"
-        "  syscall\n\n", EXIT_SUCCESS, EXIT_FAILURE) < 0) {
+        "  syscall\n\n", __NR_exit, EXIT_FAILURE) < 0) {
     perror("dprintf");
     return EXIT_FAILURE;
   }
