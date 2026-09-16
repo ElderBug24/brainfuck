@@ -257,7 +257,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
   size_t loop_stack_capacity = 256;
   loop_stack = malloc(loop_stack_capacity * sizeof(size_t));
   size_t loop_stack_count = 0;
-  for (size_t i = 0; i < input_len; ++i) {
+  for (size_t i = 0; i < input_len; ++i) { // TODO: store information about the location of the instruction in the input
     enum bfi instruction = BFI_NONE;
     switch (input[i]) {
       case '>':
@@ -309,6 +309,10 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
 
           loop_stack[loop_stack_count++] = instructions_count;
         } else if (last == BFI_END) {
+          if (loop_stack_count == 0) {
+            fprintf(stderr, "error: unmatched ']'\n");
+            return EXIT_FAILURE;
+          }
           ref = loop_stack[--loop_stack_count];
           instructions[ref].ref = instructions_count;
         }
@@ -340,6 +344,10 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
 
       loop_stack[loop_stack_count++] = instructions_count;
     } else if (last == BFI_END) {
+      if (loop_stack_count == 0) {
+        fprintf(stderr, "error: unmatched ']'\n");
+        return EXIT_FAILURE;
+      }
       ref = loop_stack[--loop_stack_count];
       instructions[ref].ref = instructions_count;
     }
@@ -349,6 +357,11 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
       .ref = ref,
       .count = count
     };
+  }
+
+  if (loop_stack_count > 0) { // TODO: for each unmatched loop, indicate its location
+    fprintf(stderr, "error: unmatched '['\n");
+    return EXIT_FAILURE;
   }
 
   if (close(fd) == -1) {
@@ -387,15 +400,15 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
         || write_print_body(out_fd) < 0
         || dprintf(out_fd, "  ret\n\n") < 0
         )
-      || dprintf(out_fd,
-        "start:\n") < 0
-      || write_raw_mode_init_body(out_fd, 0) < 0
-      || dprintf(out_fd,
-        "  mov cl, 0\n"
-        "  mov ebp, 0\n\n") < 0) {
-          perror("dprintf");
-          return EXIT_FAILURE;
-        }
+        || dprintf(out_fd,
+            "start:\n") < 0
+        || write_raw_mode_init_body(out_fd, 0) < 0
+        || dprintf(out_fd,
+            "  mov cl, 0\n"
+            "  mov ebp, 0\n\n") < 0) {
+              perror("dprintf");
+              return EXIT_FAILURE;
+            }
 
   for (size_t i = 0; i < instructions_count; ++i) {
     struct bf_instruction instruction = instructions[i];
