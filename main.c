@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
@@ -65,71 +66,83 @@ int write_move_body(int fd) {
       "  xor edx, edx\n"
       "  div ebx\n"
       "  mov ebp, edx\n"
+      "  xor ecx, ecx\n"
       "  mov cl, [mem + ebp]\n");
 }
 
 int write_input_body(int fd) {
   return dprintf(fd,
-      "  mov rax, %d\n"
-      "  mov rdi, %d\n"
-      "  lea rsi, [mem + ebp]\n"
-      "  mov rdx, 1\n"
+      "  mov eax, %d\n"
+      "  mov edi, %d\n"
+      "  lea esi, [mem + ebp]\n"
+      "  mov edx, 1\n"
       "  syscall\n"
-      "  test rax, rax\n"
+      "  test eax, eax\n"
       "  js exit_failure\n"
+      "  xor ecx, ecx\n"
       "  mov cl, [mem + ebp]\n", __NR_read, STDIN_FILENO);
 }
 
 int write_print_body(int fd) {
   return dprintf(fd,
       "  mov [mem + ebp], cl\n"
-      "  mov rax, %d\n"
-      "  mov rdi, %d\n"
-      "  lea rsi, [mem + ebp]\n"
-      "  mov rdx, 1\n"
+      "  mov eax, %d\n"
+      "  mov edi, %d\n"
+      "  lea esi, [mem + ebp]\n"
+      "  mov edx, 1\n"
       "  syscall\n"
-      "  test rax, rax\n"
+      "  test eax, eax\n"
       "  js exit_failure\n"
+      "  xor ecx, ecx\n"
       "  mov cl, [mem + ebp]\n", __NR_write, STDOUT_FILENO);
 }
 
-int write_raw_mode_init_body(int fd) {
+int write_raw_mode_init_body(int fd, unsigned uid) {
   return dprintf(fd,
-      "  mov rax, %1$d\n"
-      "  mov rdi, %2$d\n"
-      "  mov rsi, %3$d\n"
-      "  mov rdx, orig_termios\n"
+      "  mov eax, %1$d\n"
+      "  mov edi, %2$d\n"
+      "  mov esi, %3$d\n"
+      "  mov edx, orig_termios\n"
       "  syscall\n"
-      "  test rax, rax\n"
+      "  cmp eax, %10$u\n"
+      "  je raw_mode_init_%11$u\n"
+      "  test eax, eax\n"
       "  js exit_failure\n"
-      "  mov rcx, %4$lu\n"
-      "  copy_termios:\n"
-      "    mov al, [orig_termios + rcx - 1]\n"
-      "    mov [termios + rcx - 1], al\n"
-      "    loop copy_termios\n"
+      "  mov [isatty], 1\n"
+      "  mov ecx, %4$lu\n"
+      "  copy_termios_%11$u:\n"
+      "    mov al, [orig_termios + ecx - 1]\n"
+      "    mov [termios + ecx - 1], al\n"
+      "    loop copy_termios_%11$u\n"
       "  and dword [termios + %5$lu], %6$u\n"
       "  mov byte [termios + %7$lu], 1\n"
       "  mov byte [termios + %8$lu], 0\n"
-      "  mov rax, %1$d\n"
-      "  mov rdi, %2$d\n"
-      "  mov rsi, %9$d\n"
-      "  mov rdx, termios\n"
+      "  mov eax, %1$d\n"
+      "  mov edi, %2$d\n"
+      "  mov esi, %9$d\n"
+      "  mov edx, termios\n"
       "  syscall\n"
-      "  test rax, rax\n"
-      "  js exit_failure\n", __NR_ioctl, STDIN_FILENO, TCGETS, sizeof(struct termios), offsetof(struct termios, c_lflag), (tcflag_t) ~(ICANON | ECHO), offsetof(struct termios, c_cc) + VMIN * sizeof(cc_t), offsetof(struct termios, c_cc) + VTIME * sizeof(cc_t), TCSETS);
+      "  test eax, eax\n"
+      "  js exit_failure\n"
+      "raw_mode_init_%11$u:\n", __NR_ioctl, STDIN_FILENO, TCGETS, sizeof(struct termios), offsetof(struct termios, c_lflag), (tcflag_t) ~(ICANON | ECHO), offsetof(struct termios, c_cc) + VMIN * sizeof(cc_t), offsetof(struct termios, c_cc) + VTIME * sizeof(cc_t), TCSETS, (unsigned) -ENOTTY, uid);
 }
 
-int write_raw_mode_restore_body(int fd, bool graceful_exit) {
+int write_raw_mode_restore_body(int fd, bool graceful_exit, unsigned uid) {
   return dprintf(fd,
-      "  mov rax, %d\n"
-      "  mov rdi, %d\n"
-      "  mov rsi, %d\n"
-      "  mov rdx, orig_termios\n"
+      "  xor eax, eax\n"
+      "  mov al, [isatty]\n"
+      "  test eax, eax\n"
+      "  jnz raw_mode_restore_%5$u\n"
+      "  mov eax, %1$d\n"
+      "  mov edi, %2$d\n"
+      "  mov esi, %3$d\n"
+      "  mov edx, orig_termios\n"
       "  syscall\n"
-      "%s", __NR_ioctl, STDIN_FILENO, TCSETS,
+      "%4$s"
+      "raw_mode_restore_%5$u:\n", __NR_ioctl, STDIN_FILENO, TCSETS,
       graceful_exit ?
-      "  test rax, rax\n"
-      "  js exit_failure\n" : "");
+      "  test eax, eax\n"
+      "  js exit_failure\n" : "", uid);
 }
 
 int main(int argc, char** argv) { // TODO: check for loop / end coherence
@@ -354,9 +367,10 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
   if (dprintf(out_fd,
         "format ELF64 executable 32\n"
         "entry start\n\n"
+        "mem_size = %1$llu\n\n"
         "segment readable writeable\n\n"
-        "mem_size = %1$llu\n"
         "mem db mem_size dup (0)\n"
+        "isatty db 0\n"
         "termios rb %2$lu\n"
         "orig_termios rb %2$lu\n\n"
         "segment readable executable\n\n", mem_size, sizeof(struct termios)) < 0
@@ -375,7 +389,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
         )
       || dprintf(out_fd,
         "start:\n") < 0
-      || write_raw_mode_init_body(out_fd) < 0
+      || write_raw_mode_init_body(out_fd, 0) < 0
       || dprintf(out_fd,
         "  mov cl, 0\n"
         "  mov ebp, 0\n\n") < 0) {
@@ -412,7 +426,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
       case BFI_INC:
         if (dprintf(out_fd,
               "  ; inc %lu\n"
-              "  add cl, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
+              "  add ecx, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -420,7 +434,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
       case BFI_DEC:
         if (dprintf(out_fd,
               "  ; dec %lu\n"
-              "  sub cl, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
+              "  sub ecx, %u\n\n", instruction.count, (unsigned char) instruction.count) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
         }
@@ -449,7 +463,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
         if (dprintf(out_fd,
               "  ; loop %1$lu\n"
               "loop_%1$lu:\n"
-              "  cmp cl, 0\n"
+              "  cmp ecx, 0\n"
               "  je end_%2$lu\n\n", i, instruction.ref) < 0) {
           perror("dprintf");
           return EXIT_FAILURE;
@@ -473,18 +487,18 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
 
   if (dprintf(out_fd,
         "exit_success:\n") < 0
-      || write_raw_mode_restore_body(out_fd, true) < 0
+      || write_raw_mode_restore_body(out_fd, true, 0) < 0
       || dprintf(out_fd,
-        "  mov rax, %d\n"
-        "  mov rdi, %d\n"
+        "  mov eax, %d\n"
+        "  mov edi, %d\n"
         "  syscall\n"
-        "  test rax, rax\n"
+        "  test eax, eax\n"
         "  js exit_failure\n\n"
         "exit_failure:\n", __NR_exit, EXIT_SUCCESS) < 0
-      || write_raw_mode_restore_body(out_fd, false) < 0
+      || write_raw_mode_restore_body(out_fd, false, 1) < 0
       || dprintf(out_fd,
-        "  mov rax, %d\n"
-        "  mov rdi, %d\n"
+        "  mov eax, %d\n"
+        "  mov edi, %d\n"
         "  syscall\n\n", __NR_exit, EXIT_FAILURE) < 0) {
     perror("dprintf");
     return EXIT_FAILURE;
