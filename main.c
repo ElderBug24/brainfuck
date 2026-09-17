@@ -68,8 +68,7 @@ int write_move_body(int fd) {
       "  xor edx, edx\n"
       "  div ebx\n"
       "  mov ebp, edx\n"
-      "  xor ecx, ecx\n"
-      "  mov cl, [mem + ebp]\n");
+      "  movzx ecx, byte [mem + ebp]\n");
 }
 
 int write_input_body(int fd) {
@@ -81,8 +80,7 @@ int write_input_body(int fd) {
       "  syscall\n"
       "  test eax, eax\n"
       "  js exit_failure\n"
-      "  xor ecx, ecx\n"
-      "  mov cl, [mem + ebp]\n", __NR_read, STDIN_FILENO);
+      "  movzx ecx, byte [mem + ebp]\n", __NR_read, STDIN_FILENO);
 }
 
 int write_print_body(int fd) {
@@ -95,8 +93,7 @@ int write_print_body(int fd) {
       "  syscall\n"
       "  test eax, eax\n"
       "  js exit_failure\n"
-      "  xor ecx, ecx\n"
-      "  mov cl, [mem + ebp]\n", __NR_write, STDOUT_FILENO);
+      "  movzx ecx, byte [mem + ebp]\n", __NR_write, STDOUT_FILENO);
 }
 
 int write_raw_mode_init_body(int fd, unsigned uid) {
@@ -131,8 +128,7 @@ int write_raw_mode_init_body(int fd, unsigned uid) {
 
 int write_raw_mode_restore_body(int fd, bool graceful_exit, unsigned uid) {
   return dprintf(fd,
-      "  xor eax, eax\n"
-      "  mov al, [isatty]\n"
+      "  movzx eax, byte [isatty]\n"
       "  test eax, eax\n"
       "  jnz raw_mode_restore_%5$u\n"
       "  mov eax, %1$d\n"
@@ -408,7 +404,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
             "start:\n") < 0
         || write_raw_mode_init_body(out_fd, 0) < 0
         || dprintf(out_fd,
-            "  mov cl, 0\n"
+            "  mov ecx, 0\n"
             "  mov ebp, 0\n\n") < 0) {
               perror("dprintf");
               return EXIT_FAILURE;
