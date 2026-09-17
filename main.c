@@ -103,7 +103,7 @@ int write_raw_mode_init_body(int fd, unsigned uid) {
   return dprintf(fd,
       "  mov eax, %1$d\n"
       "  mov edi, %2$d\n"
-      "  mov esi, %3$d\n"
+      "  mov esi, 0x%3$x\n"
       "  mov edx, orig_termios\n"
       "  syscall\n"
       "  cmp eax, %10$u\n"
@@ -121,7 +121,7 @@ int write_raw_mode_init_body(int fd, unsigned uid) {
       "  mov byte [termios + %8$lu], 0\n"
       "  mov eax, %1$d\n"
       "  mov edi, %2$d\n"
-      "  mov esi, %9$d\n"
+      "  mov esi, 0x%9$x\n"
       "  mov edx, termios\n"
       "  syscall\n"
       "  test eax, eax\n"
@@ -137,7 +137,7 @@ int write_raw_mode_restore_body(int fd, bool graceful_exit, unsigned uid) {
       "  jnz raw_mode_restore_%5$u\n"
       "  mov eax, %1$d\n"
       "  mov edi, %2$d\n"
-      "  mov esi, %3$d\n"
+      "  mov esi, 0x%3$x\n"
       "  mov edx, orig_termios\n"
       "  syscall\n"
       "%4$s"
@@ -157,7 +157,7 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
   size_t input_len = 0;
   char* output_filepath = NULL;
   bool inline_func = false;
-  for (unsigned i = 1; i < argc; ++i) {
+  for (unsigned i = 1; i < (unsigned) argc; ++i) {
     if (memcmp(argv[i], "--mem", 5) == 0) {
       if (sscanf(&argv[i][5], "%llu", &mem_size) != 1) {
         fprintf(stderr, "error: could not parse '%s' as a positive integer\n", &argv[i][5]);
@@ -387,23 +387,23 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
         "mem db mem_size dup (0)\n"
         "isatty db 0\n"
         "align %3$lu\n"
-        "termios rb %3$lu\n"
+        "termios rb %4$lu\n"
         "align %3$lu\n"
         "orig_termios rb %4$lu\n\n"
         "segment readable executable\n\n", ELFOSABI_LINUX, mem_size, alignof(struct termios), sizeof(struct termios)) < 0
-      || !inline_func && (
-        dprintf(out_fd, "move:\n") < 0
-        || write_move_body(out_fd) < 0
-        || dprintf(out_fd,
-          "  ret\n\n"
-          "input:\n") < 0
-        || write_input_body(out_fd) < 0
-        || dprintf(out_fd,
-          "  ret\n\n"
-          "print:\n") < 0
-        || write_print_body(out_fd) < 0
-        || dprintf(out_fd, "  ret\n\n") < 0
-        )
+      || (!inline_func && (
+          dprintf(out_fd, "move:\n") < 0
+          || write_move_body(out_fd) < 0
+          || dprintf(out_fd,
+            "  ret\n\n"
+            "input:\n") < 0
+          || write_input_body(out_fd) < 0
+          || dprintf(out_fd,
+            "  ret\n\n"
+            "print:\n") < 0
+          || write_print_body(out_fd) < 0
+          || dprintf(out_fd, "  ret\n\n") < 0
+          ))
         || dprintf(out_fd,
             "start:\n") < 0
         || write_raw_mode_init_body(out_fd, 0) < 0
