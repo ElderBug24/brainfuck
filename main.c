@@ -1,7 +1,9 @@
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdalign.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -378,15 +380,17 @@ int main(int argc, char** argv) { // TODO: check for loop / end coherence
   }
 
   if (dprintf(out_fd,
-        "format ELF64 executable 32\n"
+        "format ELF64 executable %1$d\n"
         "entry start\n\n"
-        "mem_size = %1$llu\n\n"
+        "mem_size = %2$llu\n\n"
         "segment readable writeable\n\n"
         "mem db mem_size dup (0)\n"
         "isatty db 0\n"
-        "termios rb %2$lu\n"
-        "orig_termios rb %2$lu\n\n"
-        "segment readable executable\n\n", mem_size, sizeof(struct termios)) < 0
+        "align %3$lu\n"
+        "termios rb %3$lu\n"
+        "align %3$lu\n"
+        "orig_termios rb %4$lu\n\n"
+        "segment readable executable\n\n", ELFOSABI_LINUX, mem_size, alignof(struct termios), sizeof(struct termios)) < 0
       || !inline_func && (
         dprintf(out_fd, "move:\n") < 0
         || write_move_body(out_fd) < 0
